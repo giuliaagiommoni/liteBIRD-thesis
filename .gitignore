@@ -1,0 +1,6 @@
+lbs_env/
+ducc/
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
+

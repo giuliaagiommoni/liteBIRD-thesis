@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mylib"
+version = "0.0.1"
+description = "Utility per aggiungere rumore 1/f a TOD"
+authors = [{name="Tuo Nome"}]
+requires-python = ">=3.8"

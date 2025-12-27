@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: mylib
+Version: 0.0.1
+Summary: Utility per aggiungere rumore 1/f a TOD
+Author: Tuo Nome
+Requires-Python: >=3.8
