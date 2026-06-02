@@ -1,0 +1,381 @@
+\chapter{Implementation of Instrumental Noise}
+
+\section{Time-Ordered Data and Block-wise Processing}
+
+As discussed in Chapter 3, one of the key features provided by LBS is the allocation of Time-Ordered Data (TOD). A TOD represents the time series of signals recorded by each detector and is stored as a two-dimensional array of size \(N \times M\), where \(N\) is the number of detectors and \(M\) the number of time samples. Each row corresponds to the simulated timeline of a single detector, sampled at a fixed frequency.
+
+The size of the TOD grows linearly with the duration of the observation, the number of detectors, and the sampling frequency. For instance, for a single detector with a sampling frequency \(f_\text{samp} = 20 \ \text{Hz}\) and an observation duration of one year (\(T \approx 3.15 \times 10^7 \ \text{s}\)), the total number of samples is:
+\[
+N = f_\text{samp} \times T \approx 6.3 \times 10^8.
+\]
+
+If the data are stored in \texttt{float64} (8 bytes), the memory required for the TOD of a single detector is approximately:
+\[
+6.3 \times 10^8 \times 8 \ \text{bytes} \approx 5 \ \text{GB}.
+\]
+
+Additional memory is required for temporary buffers, FFT arrays, filters, and other structures needed to generate 1/f noise. With multiple detectors, this memory requirement scales linearly, quickly exceeding the capacity of standard workstations. To alleviate this, LBS supports distributing the TOD across multiple processes using MPI (Message Passing Interface), which allows splitting the data among several processes for parallel computation. This approach is particularly useful when handling long observations or multiple detectors, although it introduces challenges when simulating temporal or inter-detector correlations.
+
+In realistic CMB pipelines, while the primary TOD containing the final scientific data must be fully retained for global operations such as map-making, it is common practice to handle intermediate stages of the simulation through finite-duration segments, or blocks. This approach is essential when simulating additional components (such as instrumental noise, planetary signals, or cosmic ray interference) where the memory required for these auxiliary TODs would otherwise be added to the memory already occupied by the main data stream. To prevent exceeding the hardware's capacity, it is therefore necessary to design algorithms capable of operating on reduced-length data segments without compromising the integrity of the full observation.
+This is particularly relevant for the addition of instrumental noise, as noise generation often involves operations such as FFTs and filtering that require temporary memory buffers.
+
+
+
+\subsection{Temporal Scales of 1/f Noise Correlations}
+
+Instrumental noise in LBS is modeled as the sum of a white noise component and a correlated $1/f$ component. To account for both the knee frequency and the low-frequency cutoff required for numerical stability, the power spectral density (PSD) of a detector's noise is defined as:
+
+\begin{equation}
+    P(f) = \frac{\sigma^{2}}{f_{\text{samp}}} \left[ \frac{f^\alpha + f_{\text{knee}}^\alpha}{f^\alpha + f_{\text{min}}^\alpha} \right] \approx \frac{\sigma^{2}}{f_{\text{samp}}} \left[ 1 + \left( \frac{f_{\text{knee}}}{f} \right)^\alpha \right]
+\end{equation}
+
+where $\sigma^2$ represents the white noise variance, $f_{\text{knee}}$ is the knee frequency where the due noise components have equal power, and $\alpha$ is the spectral index of the $1/f$ component. The parameter $f_{\text{min}}$ acts as a regulator to avoid the singularity at $f = 0$, while $f_{\text{samp}}$ (the sampling frequency) is required for correct normalization; without this term, the white noise level would incorrectly depend on the specific sampling rate used. Furthermore, it should be noted that the approximation on the right-hand side of Eq. (1) is strictly valid only when $\alpha \approx 2$.
+
+
+Although this formula describes noise in the frequency domain, the time-domain correlations are crucial for block-wise processing. High frequencies correspond to fast fluctuations, whereas low frequencies correspond to long-term correlations. Even though the PSD diverges for ($f \to 0$), in the real numerical model there is always a cutoff. In the numerical implementation, a finite minimum frequency, for example \(f_\text{min} \sim 10^{-5} \ \text{Hz}\), introduces a maximum timescale \(\tau_\text{max} = 1/f_\text{min} \sim 1 \ \text{day}\). Thus, while very long correlations are cut off, the essential features of the 1/f noise remain within a block.
+
+For example, in the simulations presented in this thesis, blocks of duration \(T_\text{block} = 12 \ \text{h}\) are used. This block length is much longer than the knee timescale \(1/f_{knee} \approx 2 \ \text{s}\) and of the same order as \(\tau_\text{max}\). As a result, correlations within each block are preserved, while correlations between distant blocks are truncated. This approach reflects the standard treatment in CMB pipelines, where long-term drifts are removed or filtered during preprocessing and thus do not impact the final maps.
+
+
+
+\subsection{Motivations for Block-wise Processing}
+
+Processing the TOD in blocks is motivated by several technical and practical reasons:
+
+\begin{enumerate}
+    \item Memory efficiency:  
+    noise generation, particularly for 1/f noise, requires FFTs, filters, and temporary buffers. Processing the entire TOD in one go would require enormous amounts of memory.
+    This can be illustrated with a concrete comparison based on the parameters used in the simulations presented in this thesis.
+
+    In the block-wise approach adopted here, the TOD is divided into segments of duration \(T_\text{block} = 12 \ \text{h} = 43{,}200 \ \text{s}\). With a sampling frequency of \(f_\text{samp} = 20 \ \text{Hz}\), each block contains
+    \[
+    N_\text{block} = f_\text{samp} \times T_\text{block} = 20 \times 43{,}200 = 864{,}000
+    \]
+    time samples. When stored in \texttt{float64} format, the memory required for the TOD of a single block is approximately \(864{,}000 \times 8 \approx 6.9 \ \text{MB}\). Even accounting for additional memory used by FFTs, filtering operations, and auxiliary noise buffers, the peak memory usage remains below \(\mathcal{O}(10^2)\,\text{MB}\), which is easily manageable on a standard workstation.
+
+    In contrast, if the same simulation were performed by allocating the full TOD corresponding to one year of observation without any temporal segmentation, the total number of samples would be
+    \[
+    N = f_\text{samp} \times T \approx 6.3 \times 10^8.
+    \]
+    Storing this full TOD in memory would already require approximately \(6.3 \times 10^8 \times 8 \approx 5 \ \text{GB}\) for a single detector. Moreover, 1/f noise generation is not a purely in-place operation, since FFT-based algorithms require additional buffers comparable to the TOD itself, resulting in peak memory usages of 15–25 GB already for a single detector.
+    This limitation becomes even more severe in realistic CMB simulations, where data from multiple detectors are combined to produce maps at a given observing frequency $\nu$. In typical experimental configurations, each frequency channel includes tens to hundreds of detectors (from $\sim 20$ up to $\sim 350$ detectors per frequency band). Consequently, both the TOD size and the associated memory requirements scale linearly with the number of detectors, leading to prohibitive memory usage and making full-TOD in-memory simulations fundamentally unscalable for realistic multi-detector pipelines.
+
+    This comparison highlights how block-wise noise generation allows the memory footprint to remain effectively constant, independently of the total duration of the simulated observation.
+
+    \begin{table}[h]
+    \centering
+    \begin{tabular}{lcc}
+    \hline
+    Feature & Block-wise & Full TOD \\
+    \hline
+    Simulatable duration & Arbitrary & Limited \\
+    TOD memory & Constant & Proportional to duration \\
+    Peak RAM & $<$ 100 MB & $>$ 15 GB \\
+    Multi-detector & Yes & No \\
+    Realistic pipelines & Yes & No \\
+    Risk of crash & Low & High \\
+    \hline
+    \end{tabular}
+    \caption{Comparison between block-wise and full TOD simulations for a single detector. In multi-detector configurations, memory requirements scale linearly with the number of detectors.}
+    \end{table}
+
+    \item Scalability:  
+    LiteBIRD will observe the sky for approximately three years with thousands of detectors. A function that requires the full TOD in memory cannot scale to realistic mission simulations. Processing blocks independently allows the same function to handle multiple detectors and arbitrarily long observation durations while remaining compatible with realistic pipelines.
+
+    \item Parallelization, reproducibility, and checkpointing: 
+    independent blocks can be distributed across processes, use separate random seeds for reproducibility, and reduce the risk of crashes. If a failure occurs, only the affected block needs to be recomputed, instead of the entire TOD.
+\end{enumerate}
+
+In summary, block-wise processing of the TOD is a practical, scalable, and physically justified approach for adding instrumental noise, particularly for 1/f noise, while maintaining compatibility with real-world CMB pipelines.
+
+
+
+
+
+
+
+\section{Noise Generation Strategy}
+
+One of the fundamental aspects of Cosmic Microwave Background simulations is the addition of realistic instrumental noise to the Time-Ordered Data (TOD). In particular, detector noise is commonly modeled as the sum of a white noise component, uncorrelated in time, and a correlated $1/f$ noise component, which introduces long-term correlations in the timeline.
+
+The main focus of this thesis has been the development and comparison of two independent functions for adding instrumental noise to the TOD, both designed to operate in a block-wise fashion for the computational and physical reasons discussed in Section~4.1. The two functions, named \texttt{add\_lbsNoise} and \texttt{add\_OofaNoise}, rely on two pre-existing but conceptually different tools: the \texttt{lbs.add\_noise} function from the LBS (LiteBIRD Simulation) framework and the \texttt{OofaNoise} class provided by the \texttt{ducc0} (Distinctly Useful Code Collection) library.
+
+Despite their different implementations, both functions share the same underlying philosophy: to generate time-domain noise realizations consistent with a target white + $1/f$ power spectral density (PSD), while keeping memory usage limited and maintaining compatibility with realistic simulation pipelines. In both cases, the noise is added directly to the existing TOD (in-place), avoiding the creation of large temporary copies of the data.
+
+Both functions require three main inputs: the TOD, a detector object containing the physical parameters of the detector, and the temporal duration of the processing blocks.
+
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[
+        node distance=0.8cm,
+        % Stili per i blocchi
+        fulltod/.style={rectangle, draw=gray!80, thick, fill=gray!5, minimum width=8cm, minimum height=0.5cm, rounded corners=1pt},
+        block/.style={rectangle, draw=blue!60!black, thick, fill=blue!10, minimum width=1.6cm, minimum height=0.7cm, rounded corners=1pt},
+        noise/.style={rectangle, draw=orange!70!black, thick, fill=orange!20, minimum width=1.6cm, minimum height=0.7cm, rounded corners=1pt},
+        % Stili per le etichette e frecce
+        label/.style={font=\small\scshape\bfseries, text=black!80},
+        arrow/.style={-Stealth, thick, shorten >=2pt, shorten <=2pt, draw=black!60}
+    ]
+
+    % --- FULL TOD ---
+    \node[label] (L1) at (-2.5, 0) {Full TOD};
+    \node[fulltod] (Full) at (3.5, 0) {};
+    \node[font=\footnotesize\itshape] at (3.5, 0) {$\approx 10^8$ samples --- Gigabytes of RAM};
+
+    % --- BLOCK PROCESSING ---
+    \node[label] (L2) at (-2.5, -1.5) {Block Processing};
+    \foreach \x in {0,1,2,3,4} {
+        \node[block] (B\x) at (\x*1.6+0.3, -1.5) {};
+    }
+    \node[font=\footnotesize, text=blue!70!black] at (3.5, -0.85) {$N_{\text{block}}$ samples per segment (Megabytes)};
+
+    % --- ARROWS ---
+    \foreach \x in {0,1,2,3,4} {
+        \draw[arrow] (B\x.south) -- ++(0,-0.6);
+    }
+
+    % --- NOISE ADDITION ---
+    \node[label] (L3) at (-2.5, -3) {Noise Addition};
+    \foreach \x in {0,1,2,3,4} {
+        \node[noise] (N\x) at (\x*1.6+0.3, -3) {\scriptsize Noise};
+    }
+
+    % --- LOOP BRACE ---
+    \draw [decorate, decoration={brace, amplitude=8pt, mirror, raise=4pt}, thick, draw=black!70] 
+        (-0.4,-3.5) -- (7.4,-3.5) node [black, midway, yshift=-0.7cm, font=\small\itshape] 
+        {Sequential processing loop (In-place operation)};
+
+    \end{tikzpicture}
+    \caption{Schematic representation of the block-wise processing strategy. The full TOD is partitioned into segments of length $N_{\text{block}}$, allowing for noise generation and in-place addition. This approach ensures that the memory footprint remains constant and manageable, independent of the total observation duration, by avoiding the allocation of large auxiliary buffers for the entire timeline.}
+    \label{fig:block_processing_pro}
+\end{figure}
+
+
+\subsection{Block-wise processing}
+
+Both \texttt{add\_lbsNoise} and \texttt{add\_OofaNoise} operate by dividing the TOD into temporal segments of fixed duration, specified by the \texttt{block\_duration\_s} parameter. The number of samples contained in each block is determined by the detector sampling frequency:
+\[
+N_{\text{block}} = f_{\text{samp}} \times T_{\text{block}}.
+\]
+
+Within this scheme, the full TOD is never allocated or processed as a single monolithic structure, but is instead traversed sequentially block by block. This choice allows the memory footprint to remain nearly constant, independently of the total observation duration, and makes it possible to simulate arbitrarily long observations even on limited computational resources.
+
+From a physical perspective, block-wise processing relies on the assumption that noise correlations on timescales longer than the block duration are negligible or are effectively removed during later stages of the analysis pipeline, as is typically the case in CMB data processing. 
+
+
+\subsection{Support for multiple detectors}
+In both functions, the TOD is represented as a two-dimensional array of shape $(D, N)$, where $D$ is the number of detectors and $N$ the number of time samples. Each row of the array represents the timeline of a single detector, and noise is generated independently for each of them. In this work, we adopt the simplifying assumption of uncorrelated instrumental noise between different detectors. 
+
+While in realistic experimental setups detector noise is inherently correlated due to shared electronics and thermal environments, the standard simulation approach consists of first generating independent noise streams for each detector. These can then be correlated subsequently by applying the Cholesky matrices\footnote{The Cholesky decomposition is a mathematical method used to transform a vector of independent random variables $z$ into a vector of correlated variables $n = Lz$. Here, $L$ is a lower triangular matrix obtained by decomposing the target covariance matrix $\Sigma$ such that $\Sigma = LL^T$. This ensures that the generated noise $n$ reproduces the statistical correlations between different detectors defined by $\Sigma$.}. Since the focus of this thesis is the implementation and comparison of individual noise models in a block-wise framework, inter-detector correlations are not considered here.
+
+It is nevertheless important to clarify a limitation of the adopted implementation. At present, both functions accept a single detector object as input, implicitly assuming that all detectors in the TOD share the same noise parameters. Within the context of this thesis, this assumption is fully satisfied, since all simulations have been performed considering one detector at a time.
+
+In a more realistic scenario, where multiple detectors with different parameters are to be simulated, the implementation would need to be extended. One possible solution would be to allow the functions to accept a list of detector objects, associating the correct parameters to each row of the TOD. Alternatively, the current interface could be preserved and the functions could be applied separately to each detector in the main simulation code, passing TOD slices of shape $(1, N)$. Since such extensions are not required for the purposes of this thesis, the current implementation is sufficient.
+
+
+\subsection{Randomness and reproducibility}
+
+In both functions, noise generation is intrinsically stochastic and relies on random number generators. In the case of \texttt{add\_lbsNoise}, an independent random number generator is created for each detector and passed to the \texttt{lbs.add\_noise} function. 
+
+In the case of \texttt{add\_OofaNoise}, Gaussian white noise is generated explicitly using and subsequently filtered through the \texttt{OofaNoise} class to obtain the desired temporal correlation structure.
+
+In both cases, the generated noise is statistically consistent with the theoretical model for the parameter space currently used by LiteBIRD.
+
+
+
+
+
+\section{The \texttt{add\_lbsNoise} Function}
+
+The \texttt{add\_lbsNoise} function represents the reference implementation for adding instrumental noise to the Time-Ordered Data within the framework of this thesis. It is directly based on the functionalities provided by the LiteBIRD Simulation (LBS) framework and uses the \texttt{lbs.add\_noise} function to generate both white noise and correlated $1/f$ noise.
+
+This function has been designed to operate in a block-wise manner, in order to reduce memory usage and ensure compatibility with long-duration simulations, as discussed in Section~4.1. 
+
+
+\subsection{Implementation}
+
+What the function \texttt{add\_lbsNoise} does is to handle the temporal organization of the TOD and the processing of the data in blocks, making use of the function provided by LBS to generate the noise. Therefore, the function itself does not directly implement any noise–generation algorithm, but instead relies entirely on \texttt{lbs.add\_noise}, which internally contains all the numerical details required to produce a noise realization consistent with the detector parameters.
+
+The adoption of a block-wise processing approach does not modify the physical noise model, but is driven purely by computational requirements, allowing the function to be applied to very large TODs without the need to allocate them entirely in memory.
+
+The central element of the \texttt{add\_lbsNoise} function is the repeated call to \texttt{lbs.add\_noise} on consecutive portions of the TOD:
+\[
+\texttt{tod[:, start:end]}.
+\]
+Within each temporal block, the \texttt{lbs.add\_noise} function directly adds to the TOD a realization of $1/f$ noise, specified through the physical parameters of the detector.
+
+The noise is added in-place, i.e. by directly modifying the contents of the TOD array without creating temporary copies. The target power spectral density is fully determined by the parameters passed to the function, including the sampling rate, the white-noise level, the knee frequency, the minimum frequency, and the spectral index of the $1/f$ component.
+
+The internal implementation of \texttt{lbs.add\_noise}, which includes operations such as Fourier transforms, filtering, and edge handling, is based on a standard and open-source noise-generation routine. This FFT-based approach is theoretically flexible as it allows for the simulation of arbitrary power spectral densities; however, it presents two significant practical drawbacks in the context of block-wise processing. First, the use of FFTs requires substantial memory allocation for temporary buffers, which scales with the block size. Second, because each block is generated independently, this method can introduce artificial discontinuities at the boundaries between consecutive blocks, potentially affecting the long-term temporal coherence of the noise.
+
+\bigskip
+
+\begin{lstlisting}[language=Python,
+                   caption={Implementation of the \texttt{add\_lbsNoise} function},
+                   label={lst:add_lbsNoise}]
+def add_lbsNoise(tod, det, block_duration_s):
+   
+    n_block = int(block_duration_s * det.sampling_rate_hz)
+    n_samp = tod.shape[1]
+
+    dets_random = [np.random.default_rng() for _ in range(tod.shape[0])]
+
+    for start in range(0, n_samp, n_block):
+        end = min(start + n_block, n_samp)
+        
+        lbs.add_noise(
+            tod=tod[:, start:end],
+            noise_type="one_over_f",
+            sampling_rate_hz=det.sampling_rate_hz,
+            net_ukrts=det.net_ukrts,
+            fknee_mhz=det.fknee_mhz,
+            fmin_hz=det.fmin_hz,
+            alpha=det.alpha,
+            dets_random=dets_random,
+            scale=1.0,
+        )
+
+    return tod
+\end{lstlisting}
+
+
+\subsection{Inputs and setup}
+
+The \texttt{add\_lbsNoise} function takes as input a TOD with shape $(D, N)$, where $D$ is the number of detectors and $N$ is the number of time samples, together with a \texttt{DetectorInfo} object from the LBS framework containing the physical parameters of the detector, as well as the duration of the time block (in seconds) into which the TOD is to be divided. In particular, the parameters relevant for noise generation are:
+\begin{itemize}
+    \item \texttt{sampling\_rate\_hz}, the detector sampling rate;
+    \item \texttt{net\_ukrts}, the white-noise level expressed as Noise Equivalent Temperature;
+    \item \texttt{fknee\_mhz}, the knee frequency of the $1/f$ component;
+    \item \texttt{fmin\_hz}, the minimum frequency used as a low-frequency cutoff;
+    \item \texttt{alpha}, the spectral index of the $1/f$ noise.
+\end{itemize}
+
+It is important to note that \texttt{lbs.add\_noise} uses the same parameters contained in the \texttt{DetectorInfo} object, and therefore does not require any parameter conversion.
+
+The duration of the temporal block is specified through the \texttt{block\_duration\_s} parameter, which is converted into the corresponding number of samples using the detector sampling rate.
+
+To ensure that the noise realizations are statistically independent among different detectors, the function creates a separate random number generator for each detector. These generators are then passed to \texttt{lbs.add\_noise}, which internally uses them to produce the stochastic noise realizations. In this way, each timeline receives an independent noise realization, while sharing the same set of physical parameters.
+
+
+
+\subsection{Advantages and limitations}
+
+The main advantage of \texttt{add\_lbsNoise} lies in its full integration with the LiteBIRD Simulation framework. The function is easy to use, fully compatible with the rest of the simulation pipeline, and relies on a consolidated and well-tested implementation for instrumental noise generation. The underlying noise-generation routine is open source and based on standard algorithms that are widely used in CMB simulation codes, making it reliable and physically well motivated.
+
+However, this approach presents two main limitations. The first is related to its memory behavior: the generation of $1/f$ noise relies on FFT-based algorithms that require temporary buffers whose size grows with the length of the processed block. Consequently, increasing the block duration leads to a corresponding increase in memory usage, which can become prohibitive when long blocks are required or when many detectors are simulated simultaneously. The second limitation concerns the temporal coherence of the noise: since each block is generated independently via FFT, this method introduces artificial discontinuities at the boundaries between consecutive blocks, which can lead to inaccuracies in the low-frequency part of the noise spectrum.
+
+These limitations motivate the development and use of an alternative noise-generation strategy, described in Section~4.4, which provides a comparable physical noise model while achieving a much lower and effectively constant memory footprint for the noise generator itself, of the order of a few dozen bytes, independent of the block length.
+
+
+
+
+\section{The \texttt{add\_OofaNoise} Function}
+
+The \texttt{add\_OofaNoise} function provides an alternative implementation for adding instrumental noise to the Time-Ordered Data (TOD) with a greater level of control and transparency. Unlike \texttt{add\_lbsNoise}, which relies on the LiteBIRD Simulation (LBS) framework, \texttt{add\_OofaNoise} uses the \texttt{ducc0.misc.OofaNoise} generator to produce temporally correlated $1/f$ noise independently for each detector.
+
+This approach is particularly important for large-scale simulations because it has a very low and constant memory footprint, regardless of the block size, and it avoids the discontinuities that may arise at the edges of the processed blocks in FFT-based methods. These properties make \texttt{OofaNoise} well suited for simulations where both efficiency and continuity of the noise realization are crucial.
+
+This approach is mathematically explicit: the generator transforms Gaussian white noise into 1/f noise with a power spectral density proportional to $1/f^\alpha$, corresponding to the standard model of $1/f$ noise often observed in real detectors.
+
+
+\subsection{\texttt{OofaNoise} and parameter conversion}
+The \texttt{OofaNoise} class in \texttt{ducc0} implements a numerical filter based on the algorithm by Plaszczynski \cite{PLASZCZYNSKI2007}, which converts white Gaussian noise into temporally correlated noise with a $1/f^\alpha$ spectrum. The class relies on a composite filter structure (\texttt{oofafilter}) that approximates the desired spectral slope by combining multiple second-order filters (\texttt{oof2filter}). This approach effectively represents the $1/f^\alpha$ power law through a sum of pole-zero filters, providing an accurate representation of the noise properties over many decades in frequency while maintaining a very low computational overhead.
+
+To correctly use \texttt{OofaNoise}, some detector parameters must be converted from the standard \texttt{DetectorInfo} units to the units required by the generator:
+\begin{itemize}
+    \item The white noise standard deviation is obtained from the detector NET in $\mu$K$\sqrt{\rm s}$ as:
+    \[
+        \texttt{sigmawhite} = \texttt{det.net\_ukrts} \times 10^{-6} \sqrt{\texttt{det.sampling\_rate\_hz}}
+    \]
+    This converts the noise-equivalent temperature to the standard deviation per sample.
+    \item The knee frequency is converted from mHz to Hz:
+    \[
+        \texttt{f\_knee} = \texttt{det.fknee\_mhz} \times 10^{-3}
+    \]
+    \item The spectral slope is negated:
+    \[
+        \texttt{slope} = -\texttt{det.alpha}
+    \]
+    to match the convention used by \texttt{OofaNoise}.
+\end{itemize}
+
+For each detector, an \texttt{OofaNoise} instance is created using the converted parameters. This ensures that each timeline receives an independent noise realization with the correct PSD characteristics.
+
+The resulting noise realization reproduces the theoretical power spectral density of the detector noise, which is given by
+
+\begin{equation}
+P(f) = \frac{\sigma^{2}}{f_{\text{samp}}} \left[ \frac{f^{2} + f_{\text{knee}}^{2}}{f^{2} + f_{\text{min}}^{2}} \right]^{\alpha/2} \approx \frac{\sigma^{2}}{f_{\text{samp}}} \left[ 1 + \left( \frac{f_{\text{knee}}}{f} \right)^{2} \right]^{\alpha/2}
+\end{equation}
+
+where $f_\text{samp}$ is the sampling frequency, $f_\text{knee}$ is the knee frequency, $f_\text{min}$ is the low-frequency cutoff, and $\alpha$ is the spectral slope of the 1/f component. This equation illustrates that the \texttt{OofaNoise} filter implements exactly the standard model of 1/f noise used in detector simulations.
+\bigskip
+
+
+\begin{lstlisting}[language=Python,
+                   caption={Implementation of the \texttt{add\_OofaNoise} function},
+                   label={lst:add_OofaNoise}]
+def add_OofaNoise(tod, det, block_duration_s):
+    
+    n_block = int(block_duration_s * det.sampling_rate_hz)
+    n_samp = tod.shape[1]
+   
+    noise_gens = [
+        ducc0.misc.OofaNoise(
+            sigmawhite=det.net_ukrts * 1e-6 * np.sqrt(det.sampling_rate_hz),
+            f_knee=det.fknee_mhz * 1e-3,
+            f_min=det.fmin_hz,
+            f_samp=det.sampling_rate_hz,
+            slope=-det.alpha,
+        )
+        for _ in range(tod.shape[0])
+    ]
+
+    for start in range(0, n_samp, n_block):    
+        end = min(start + n_block, n_samp)     
+        block_len = end - start                
+
+        for d in range(tod.shape[0]):
+            white_chunk = np.random.normal(0., 1., block_len)
+            tod[d, start:end] += noise_gens[d].filterGaussian(white_chunk)
+            del white_chunk  
+
+    return tod
+\end{lstlisting}
+
+
+
+\subsection{Block-wise noise generation}
+
+The TOD is processed in blocks of duration \texttt{block\_duration\_s}, similarly to \texttt{add\_lbsNoise}, to maintain a low memory footprint. For each block:
+\begin{enumerate}
+    \item The end index of the block is determined as $\texttt{end} = \min(\texttt{start} + n_{\rm block}, N)$, ensuring that the last block may be smaller if the total number of samples is not a multiple of the block size.
+    \item For each detector:
+    \begin{enumerate}
+        \item A block of Gaussian white noise is generated:
+        \[
+        \texttt{white\_chunk} = \texttt{np.random.normal(0., 1., block\_len)}
+        \]
+        \item The white noise is filtered with the corresponding \texttt{OofaNoise} instance:
+        \[
+        \texttt{noise\_gens[d].filterGaussian(white\_chunk)}
+        \]
+        \item The filtered noise is added in-place to the corresponding segment of the TOD.
+    \end{enumerate}
+    \item Temporary arrays are deleted after processing each block to keep memory usage low.
+\end{enumerate}
+
+This explicit procedure faithfully reproduces the theoretical $1/f^\alpha$ noise model, providing full control over the spectral properties.
+
+
+\subsection{Advantages and limitations}
+The main advantages of \texttt{add\_OofaNoise} include a very low and effectively constant memory usage that remains independent of the block length, as well as the absence of discontinuities at block edges, which preserves the temporal coherence of the noise. Furthermore, this approach provides the user with full control by allowing the inspection and modification of each step of the noise generation process, while ensuring that each detector is treated through independent noise streams.
+
+The main limitation of this approach is spectral rigidity: the generator is strictly tied to the analytical model described by Eq. (4.2). Unlike FFT-based methods, which can simulate any arbitrary power spectral density by directly defining the PSD function, \texttt{OofaNoise} is limited to the specific $1/f^\alpha$ functional form implemented by the digital filter.
+
+Despite these limitations, \texttt{add\_OofaNoise} is particularly suited for simulations requiring strict control over the noise realization, low memory usage, and continuity across blocks.
+
+Overall, both functions correctly add $1/f$ noise to the TOD, but they reflect different trade-offs: \texttt{add\_lbsNoise} provides seamless integration and ease of use within the LiteBIRD simulation framework, while \texttt{add\_OofaNoise} offers minimal memory footprint, and block-wise continuity. 
+
+Having discussed the implementation details of the two block-wise noise-generation approaches, the next step is to compare the results produced by simulations that use these functions. Chapter~5 addresses this question through short-duration simulations, focusing on time-domain properties and power spectral densities, while Chapter~6 extends the analysis to long-duration simulations and to the map-making process, examining the impact of the two noise-generation strategies on noise maps and on statistics in the harmonic domain.
+

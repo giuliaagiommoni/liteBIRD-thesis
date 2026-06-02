@@ -1,0 +1,218 @@
+\documentclass{report}
+
+% ====== PACCHETTI DI BASE ======
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian,english]{babel} % ultima lingua = principale
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\usepackage{subcaption} 
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{decorations.pathreplacing, positioning, arrows.meta}
+% === Colored, numbered boxes for a thesis ===
+\usepackage[most]{tcolorbox} % pacchetto principale
+\tcbuselibrary{theorems,skins,breakable}
+\usepackage{xcolor}
+
+% Palette sobria (puoi modificare a piacere)
+\definecolor{BoxFrame}{RGB}{60,60,60}   % bordo
+\definecolor{BoxBack}{RGB}{245,245,245} % sfondo
+\definecolor{Accent}{RGB}{128,0,32}    % accento per titoli
+
+% Stile base riutilizzabile
+\tcbset{
+  thesisbox/.style={
+    enhanced,
+    breakable,               % va a capo sulle pagine
+    colframe=BoxFrame,       % colore bordo
+    colback=BoxBack,         % colore sfondo
+    boxrule=0.6pt,           % spessore bordo
+    arc=1.2mm,               % arrotondamento angoli
+    left=6pt,right=6pt,top=6pt,bottom=6pt,
+    title style={colback=white, colframe=BoxFrame},
+    coltitle=Accent,
+    fonttitle=\bfseries,
+    attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxed title style={boxrule=0.6pt},
+  },
+}
+
+% --- Versioni SENZA numerazione ---
+\newtcolorbox{DefinitionBox}[1][]{thesisbox, title=Definition, #1}
+\newtcolorbox{NoteBox}[1][]{thesisbox, title=Note, #1}
+\newtcolorbox{ExampleBox}[1][]{thesisbox, title=Example, #1}
+
+% --- Versioni CON numerazione in stile "Theorem-like" ---
+% Numerate per capitolo (reset ogni \chapter); se usi \section come top-level, cambia "chapter" in "section"
+\newtcbtheorem[number within=chapter]{Definition}{Definition}%
+{thesisbox}{def}
+\newtcbtheorem[number within=chapter]{Remark}{Note}%
+{thesisbox}{rem}
+\newtcbtheorem[number within=chapter]{Example}{Example}%
+{thesisbox}{ex}
+
+% ====== BIBLIOGRAFIA ======
+\usepackage{csquotes}
+\usepackage[backend=biber,style=numeric]{biblatex}
+\addbibresource{bibliography.bib}
+
+% ====== TITOLI GRANDI E NUMERAZIONE ======
+\usepackage[explicit]{titlesec}
+
+% --- Capitoli ---
+\renewcommand{\chaptername}{}
+\titleformat{\chapter}[hang]
+  {\bfseries\Huge}
+  {\thechapter\ }{0pt}{#1}
+\titlespacing*{\chapter}{0pt}{-10pt}{20pt} 
+
+% --- Sezioni ---
+\titleformat{\section}[block]
+  {\bfseries\LARGE}
+  {\thesection}{1em}{#1}
+\titlespacing*{\section}{0pt}{15pt}{10pt}
+
+% --- Sottosezioni ---
+\titleformat{\subsection}[block]
+  {\bfseries\Large}
+  {\thesubsection}{1em}{#1}
+\titlespacing*{\subsection}{0pt}{10pt}{5pt}
+
+% ====== FONT SIZE NORMALE PERSONALIZZATO ======
+\makeatletter
+\renewcommand\normalsize{%
+   \@setfontsize\normalsize{13pt}{15.6pt}%
+}
+\makeatother
+
+
+
+% ====== CODE LISTINGS (Python) ======
+\usepackage{listings}
+
+% Colori per il codice
+\definecolor{codegray}{rgb}{0.45,0.45,0.45}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{codeblue}{rgb}{0.10,0.10,0.70}
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+
+% Stile Python per la tesi
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{codeblue}\bfseries,
+    commentstyle=\color{codegray}\itshape,
+    stringstyle=\color{codepurple},
+    %numbers=left,
+    %numberstyle=\tiny\color{codegray},
+    stepnumber=1,
+    numbersep=8pt,
+    frame=single,
+    rulecolor=\color{BoxFrame},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b
+}
+
+% Imposta Python come default (opzionale)
+\lstset{style=pythonstyle, language=Python}
+
+
+
+
+
+
+\begin{document}
+
+% ====== FRONTESPIZIO ======
+\begin{titlepage}
+    \centering
+    \includegraphics[width=1\textwidth]{immagineuni.jpg}\par\vspace{1cm}
+    {\scshape\Large Department of Physics\par}
+    \vspace{1cm}
+    {\scshape\Large Bachelor’s Degree in Physics\par}
+    \vspace{2cm}
+    {\huge\bfseries Simulation of LiteBIRD Instrumental Noise with the LBS Framework \par}
+    \vspace{2cm}
+    \begin{flushleft} 
+        \large
+        \textbf{Supervisor:} Prof. Maurizio Tomasi\\
+    \end{flushleft}
+    \vfill
+    \begin{flushright}
+        \large
+        \textbf{Bachelor’s Thesis by:}\\
+        Giulia Giommoni\\
+        Student ID: 12201A
+    \end{flushright}
+    \vfill
+    {\large Academic Year 2024--2025\par}
+\end{titlepage}
+
+
+
+
+% ====== ABSTRACT ======
+\newpage
+\section*{Abstract}
+The study of Cosmic Microwave Background (CMB) anisotropies represents one of the most advanced frontiers of modern cosmology. The \textit{LiteBIRD} space mission aims to detect primordial B-modes, extremely weak polarized signals that would provide definitive evidence of cosmic inflation. However, achieving such sensitivity requires rigorous control of instrumental noise, particularly the low-frequency correlated component known as $1/f$ noise. This noise is especially critical because its temporal correlations project onto large angular scales (low multipoles $\ell$), where the B-mode signal exhibits its recombination peak, risking the masking of cosmological information.
+
+This thesis work focuses on the modeling, implementation, and validation of efficient strategies for generating instrumental noise with the \textit{LiteBIRD Simulation (LBS)} framework. The central problem addressed is the computational management of large data volumes (Time-Ordered Data): the realistic simulation of a mission produces hundreds of millions of samples, making data allocation and processing a prohibitive task for standard memory resources.
+
+To overcome this obstacle, two different noise generation functions operating in block-wise mode have been implemented and compared: 
+
+\begin{enumerate}
+    \item \texttt{add\_lbsNoise}: based on Fast Fourier Transform (FFT) algorithms already integrated into the LBS framework.
+    \item \texttt{add\_OofaNoise}: based on the \texttt{ducc0} library, which uses recursive digital filters to transform white noise into $1/f$ noise in a continuous and computationally lightweight manner.
+\end{enumerate}
+
+The validation of the models was conducted through several analyses. Initially, in the time and frequency domains, the Power Spectral Density (PSD) was verified, confirming that both methods correctly reproduce the required knee frequency and spectral index. Subsequently, an optimized map-making pipeline using JIT compilation (Numba) was implemented to project an entire year of simulation onto the celestial sphere using HEALPix pixelization.
+
+The resulting noise maps, limited to the intensity (temperature) component, allowed for the visualization of the characteristic stripping patterns induced by temporal correlations along the satellite's scanning strategy. Finally, the analysis in the harmonic domain of the angular power spectra ($C_\ell^{TT}$) confirmed the statistical consistency of the two models. The comparison highlights how the approach based on digital filters offers advantages in terms of temporal continuity between blocks and more efficient memory management.
+
+In conclusion, this work provides a concrete tool for managing long-duration simulations. The results demonstrate that the block-wise approach allows for the processing of LiteBIRD's actual data volume.
+
+
+
+
+
+% ====== INDICE ======
+\tableofcontents
+\newpage
+
+
+
+
+% ====== CAPITOLI ======
+\input{chapters/1_introduction}
+\input{chapters/2_background}
+\input{chapters/3_LBS}
+\input{chapters/4_noise_impl}
+\input{chapters/5_timefreq_domain}
+\input{chapters/6_healpix}
+\input{chapters/7_conclusion}
+
+
+\cleardoublepage
+\printbibliography
+
+% ====== APPENDICI ======
+\cleardoublepage
+\appendix
+\renewcommand{\thechapter}{\Alph{chapter}} 
+
+
+% Carica il file unico
+\input{Appendices/appendix}
+
+
+\end{document}
+
+

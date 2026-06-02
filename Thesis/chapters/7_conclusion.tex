@@ -1,0 +1,50 @@
+\chapter{Conclusions}
+
+\section{Summary of the Work}
+In this thesis, we have addressed one of the most critical aspects of Cosmic Microwave Background (CMB) simulations: the modeling and generation of correlated instrumental noise for the LiteBIRD mission. 
+
+The core of this work consisted in the implementation of two independent, block-wise noise-generation functions: \texttt{add\_lbsNoise}, based on the LiteBIRD Simulation framework, and \texttt{add\_OofaNoise}, based on the \texttt{ducc0} library. This development has led the simulation process to move from a monolithic to a segmented approach, memory-efficient pipeline, enabling the simulation of long-duration Time-Ordered Data (TOD) that would otherwise be computationally prohibitive.
+
+The models were validated through a different testing strategy:
+\begin{itemize}
+    \item Time and Frequency Domains: short-term simulations confirmed that both methods accurately reproduce the target $1/f$ Power Spectral Density (PSD).
+    \item Map Domain: long-term simulations were performed using a JIT-optimized (Numba) map-making pipeline. These tests allowed us to visualize the spatial stripping patterns caused by temporal correlations and to confirm that the scanning strategy's redundancy naturally mitigates $1/f$ drifts. Furthermore, the generated maps enabled the calculation of the angular power spectrum ($C_\ell^{TT}$).
+\end{itemize}
+
+
+
+
+\section{Final Comparison Between Noise Models}
+The comparison between the two implemented approaches are summarized in Table~7.1.
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Feature} & \textbf{add\_lbsNoise (FFT-based)} & \textbf{add\_OofaNoise (Filter-based)} \\ \midrule
+Implementation & FFT-based stochastic generation & Recursive digital filtering \\
+Memory Usage & Scalable with block size & Minimal and constant \\
+Continuity & Potential block-edge jumps & Intrinsic temporal continuity \\
+Spectral Flexibility & High (arbitrary PSDs) & Rigid (fixed $1/f^\alpha$ model) \\
+Integration & Native to LBS & Requires parameter conversion \\
+Performance & Efficient for medium blocks & Superior for long durations \\ \bottomrule
+\end{tabular}
+\caption{Comparative analysis between the LBS and ducc0-based noise generation functions.}
+\label{tab:comparison_models}
+\end{table}
+
+While \texttt{add\_lbsNoise} remains a versatile tool for simulating complex, non-standard noise spectra, \texttt{add\_OofaNoise} proved to be a more robust solution. Its key advantages reside in its ability to maintain perfect continuity across block boundaries and its significantly lower memory footprint. Additionally, the \texttt{ducc0} implementation demonstrated a slight performance advantage, reducing execution times by a margin ranging from a few seconds up to one minute for the longest simulations in this work.
+
+
+
+\section{Future Improvements}
+The framework developed in this thesis provides a solid foundation for more complex simulation scenarios. Future developments could include:
+
+\begin{itemize}
+    \item Multi-Detector Correlations: extending the block-wise functions to handle multi-detector arrays where individual detectors are characterized by different noise parameters.
+    \item Signal-plus-Noise Pipelines: integrating the noise models with actual CMB anisotropies and Galactic foreground signals to test the effectiveness of destriping algorithms in recovering the cosmological signal.
+\end{itemize}
+
+In conclusion, this work demonstrates that a block-wise approach to noise generation is a computational necessity for modern CMB experiments.
+
+

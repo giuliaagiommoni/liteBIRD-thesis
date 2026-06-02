@@ -1,0 +1,205 @@
+\chapter{Implementation Details and Simulation Code}
+\label{appendix:code}
+
+This appendix provides the Python implementation of the main components of this thesis. The code is organized into three main sections: time and frequency domain validation (Chapter 5), the map-making and harmonic analysis pipeline (Chapter 6), and functions optimized using Just-In-Time (JIT).
+
+\section{Time and Frequency Domain Analysis}
+This script handles noise model validation by producing simulated time-ordered data (TOD) and the theoretical power spectral density (PSD) model. Although the following code uses a "mock detector" for demonstration, a real detector can be loaded from the LiteBIRD instrument model (IMo).
+
+\begin{lstlisting}[language=Python, caption={Validation of noise statistics in time and frequency domains.}]
+import litebird_sim as lbs
+import numpy as np
+from scipy.signal import welch
+from mylib import add_lbsNoise, add_OofaNoise
+
+# --- Simulation Setup ---
+start_time = 0
+time_span_s = 1000.0  # Duration sufficient for 1/f characterization
+
+sim = lbs.Simulation(
+    start_time=start_time,
+    duration_s=time_span_s,
+    random_seed=12345,
+    imo=lbs.Imo(flatfile_location=lbs.PTEP_IMO_LOCATION)
+)
+
+# --- Scanning Strategy ---
+sim.set_scanning_strategy(
+    lbs.SpinningScanningStrategy(
+        spin_sun_angle_rad=np.deg2rad(0),
+        precession_rate_hz=0,
+        spin_rate_hz=1/60,
+        start_time=start_time,
+    ),
+    delta_time_s=5.0,
+)
+
+# --- Detector Setup ---
+# Note: Parameters can be substituted with IMO data 
+det = lbs.DetectorInfo(
+    name="Boresight_detector",
+    sampling_rate_hz=20.0,
+    bandcenter_ghz=100.0,
+    net_ukrts=50.0,
+    fknee_mhz=500.0,
+    fmin_hz=1e-5,
+    alpha=1.0
+)
+
+sim.create_observations(detectors=det)
+tod = sim.observations[0].tod 
+
+# --- Noise Generation ---
+# Model selection: add_lbsNoise (FFT-based) or add_OofaNoise (Filter-based)
+add_lbsNoise(tod, det, block_duration_s=100)
+
+# --- Spectral Estimation (Welch Method) ---
+frequencies, psd = welch(
+    tod,
+    fs=det.sampling_rate_hz,
+    window='hann',
+    nperseg=2**12,
+    noverlap=2**11,
+    scaling='density',
+    return_onesided=False
+)
+
+# Sorting frequencies for analysis
+sort_idx = np.argsort(frequencies)
+frequencies = frequencies[sort_idx]
+psd = psd[:, sort_idx]
+
+# --- Theoretical PSD Comparison ---
+f = frequencies
+f_knee = det.fknee_mhz / 1000.0  # Convert to Hz
+f_min = det.fmin_hz
+
+# Analytical model for 1/f + white noise
+theoretical_psd = (det.net_ukrts**2) * ( (f**det.alpha + f_knee**det.alpha) / (f**det.alpha + f_min**det.alpha) )
+\end{lstlisting}
+
+
+
+
+
+\section{Full Map-Making and Harmonic Analysis Pipeline}
+This section presents the integrated pipeline used to generate the long-term simulation results discussed in Chapter 6. The implementation adopts an incremental map-making strategy to maintain a minimal memory footprint by processing 365 days of observation in 12-hour chunks. 
+
+The final part of the script illustrates the harmonic decomposition of the resulting noise maps to estimate the angular power spectrum $C_\ell^{TT}$.
+
+\begin{lstlisting}[language=Python, caption={Incremental map-making and angular power spectrum estimation.}]
+import healpy as hp
+import numpy as np
+from uuid import UUID
+import litebird_sim as lbs
+from mylib import add_OofaNoise, add_lbsNoise, add_samples_to_map, normalize_map
+
+# --- 1. Simulation & Instrument Configuration ---
+nside = 128  # Map resolution
+lmax = 3 * nside - 1
+chunk_length = 3600 * 12  # 12-hour blocks
+number_of_days = 365
+duration_s = 86400 * number_of_days 
+num_of_observations = duration_s // chunk_length
+
+sim = lbs.Simulation(
+    start_time=0,
+    duration_s=duration_s,
+    random_seed=12345,
+    imo=lbs.Imo(flatfile_location=lbs.PTEP_IMO_LOCATION)
+)
+
+# Scanning Strategy (LiteBIRD Spinning Strategy)
+sim.set_scanning_strategy(
+    lbs.SpinningScanningStrategy.from_imo(
+        imo=lbs.Imo(lbs.PTEP_IMO_LOCATION), 
+        url=UUID("117fd641-a925-4eeb-9fda-f7c468682108")
+    ),
+    delta_time_s=120.0
+)
+
+# Instrument and Detector Setup
+instrument = lbs.InstrumentInfo(
+    boresight_rotangle_rad=0.0,
+    spin_boresight_angle_rad=np.deg2rad(90),
+    spin_rotangle_rad=np.deg2rad(75)
+)
+sim.set_instrument(instrument)
+
+det = lbs.DetectorInfo(
+    name="Boresight_detector", sampling_rate_hz=20.0, net_ukrts=50.0,
+    fknee_mhz=500.0, fmin_hz=1e-5, alpha=1.0
+)
+
+# --- 2. Incremental Processing Loop ---
+# Allocate metadata without full TOD arrays to save RAM
+sim.create_observations(detectors=det, num_of_obs_per_detector=num_of_observations, allocate_tod=False)
+
+# Pre-allocate map buffers and temporary TOD block
+accum_map = np.zeros(hp.nside2npix(nside))
+hit_count_map = np.zeros(len(accum_map), dtype='int64')
+tod_buffer = np.empty((1, int(det.sampling_rate_hz * chunk_length)))
+
+for obs_idx, cur_obs in enumerate(sim.observations):
+    # A. Pointing Generation
+    lbs.prepare_pointings(cur_obs, instrument, sim.spin2ecliptic_quats)
+    pointings, _ = cur_obs.get_pointings("all")
+    pixidx = hp.ang2pix(nside, pointings[0,:,0], pointings[0,:,1])
+    
+    # B. Noise Generation (In-place)
+    tod_buffer[:, :] = 0.0
+    add_OofaNoise(tod_buffer, det, block_duration_s=chunk_length)
+    
+    # C. Map Accumulation (using Numba-optimized kernels)
+    add_samples_to_map(tod_buffer, pixidx, accum_map, hit_count_map)  
+
+# Final normalization (Binned Map-Making)
+normalize_map(accum_map, hit_count_map)
+
+# --- 3. Harmonic Analysis (Power Spectrum Estimation) ---
+# The following steps decompose the map into Spherical Harmonics 
+# and compute the auto-correlation power spectrum.
+
+almT = hp.map2alm(accum_map, lmax=lmax)
+clTT = hp.alm2cl(almT)
+\end{lstlisting}
+
+
+
+
+
+\section{Numba-Optimized Kernels}
+These functions are decorated with \texttt{@njit} to handle the high-speed accumulation of TOD samples into HEALPix pixels.
+
+\begin{lstlisting}[language=Python, caption={Performance-critical Numba kernels for sample accumulation and map normalization.}]
+from numba import njit
+
+@njit
+def add_samples_to_map(tod, pixel_indexes, accum_map, hit_count_map):
+    """
+    Accumulates TOD samples into the HEALPix maps using JIT-optimized loops.
+    
+    Parameters:
+    - tod: 2D array (ndet, nsample) containing the noise data.
+    - pixel_indexes: 1D array of pixel indices corresponding to the scan strategy.
+    - accum_map: The map where signal values are summed.
+    - hit_count_map: The map counting the number of observations per pixel.
+    """
+    ndet, nsample = tod.shape
+
+    for det_idx in range(ndet):
+        for sample_idx in range(nsample):
+            pix_idx = pixel_indexes[sample_idx]
+            accum_map[pix_idx] += tod[det_idx, sample_idx]
+            hit_count_map[pix_idx] += 1
+
+@njit
+def normalize_map(accum_map, hit_count_map):
+    """
+    Performs binned map-making normalization by dividing the accumulated 
+    signal by the hit count.
+    """
+    for pix_idx in range(len(accum_map)):
+        if hit_count_map[pix_idx] > 0:
+            accum_map[pix_idx] /= hit_count_map[pix_idx]
+\end{lstlisting}

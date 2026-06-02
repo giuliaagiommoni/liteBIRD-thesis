@@ -1,0 +1,138 @@
+\chapter{Simulation Framework and Instrument Modeling}
+
+
+\section{The LiteBIRD Simulation Framework}
+
+The \textit{LiteBIRD Simulation Framework (LBS)} is a Python-based library designed to model the data acquisition process of the LiteBIRD instruments and to simulate the time-ordered data (TOD) that will be produced once the satellite is deployed in space. The primary motivation behind LBS is to validate the instrument design and assess whether the mission can achieve its main scientific goal, namely setting a stringent upper limit on the tensor-to-scalar ratio $r$, under the assumption of a fiducial model with $r = 0$ \cite{Tomasi2025}.
+
+LBS has been developed to support end-to-end (E2E) simulations, which typically include:
+\begin{enumerate}
+    \item the generation of a model sky signal;
+    \item the simulation of the spacecraft motion and instrument response;
+    \item the production of detector timelines (TOD);
+    \item the reconstruction of sky maps at multiple frequencies;
+    \item the estimation of angular power spectra and cosmological parameters.
+\end{enumerate}
+
+Rather than implementing a single monolithic E2E pipeline, the LiteBIRD collaboration adopted a modular framework approach. LBS provides a collection of independent modules that can be combined to build different simulation pipelines, depending on the scientific objective.
+
+This design offers several advantages:
+\begin{itemize}
+    \item multiple pipelines can be developed consistently, including full E2E simulations, simplified pipelines for rapid testing, and dedicated pipelines targeting specific effects;
+    \item the reuse of common modules ensures consistency in the mathematical models describing the instrument and in the data formats used across different simulations;
+    \item individual components, such as noise models or scanning strategies, can be modified or replaced without affecting the rest of the pipeline.
+\end{itemize}
+
+These features make LBS particularly suitable for controlled studies of instrumental effects, such as the analysis of different noise-generation techniques presented in this thesis.
+
+
+\section{Simulation Architecture and Pipeline Structure}
+The core component of LBS is the \texttt{Simulation} class, which represents the central container of any simulation pipeline built within the framework. This class manages the global configuration of the simulation and coordinates the interaction between the various modules, such as scanning strategy, instrument modeling, TOD allocation, and noise generation.
+
+Several key pieces of information are shared across different modules through the \texttt{Simulation} object. For instance, the duration of the simulation determines both the total number of time samples to be allocated in memory and the temporal evolution of the spacecraft pointing. Similarly, the initialization of a random number generator ensures reproducibility across simulations.
+
+The \texttt{Simulation} class also provides access to the Instrument Model database, allowing instrument and detector parameters to be loaded in a consistent and transparent way.
+
+
+
+\section{Observation Model: Time-Ordered Data and Pointing}
+
+A central concept in LBS is the \textit{Time-Ordered Data (TOD)}, which represent the output timelines of the detectors and are stored as sequences of samples acquired at a fixed sampling rate. In general, the TOD can be arranged in a two-dimensional matrix of size $N \times M$, where $N$ is the number of detectors and $M$ is the number of time samples.
+
+In addition to the detector timelines, simulations require accurate pointing information, which specifies both the sky direction observed by each detector and its orientation with respect to the local reference frame. At each time sample, the pointing is fully described by three angles.
+
+The direction of observation is encoded by the spherical coordinates $(\theta, \varphi)$, where $\theta$ is the colatitude (defined as $90^\circ$ minus the latitude) and $\varphi$ is the longitude. The detector orientation is instead described by a polarization angle $\phi$, defined with respect to the local meridian or parallel at the observed sky position. This angle specifies the direction of maximum sensitivity to linearly polarized radiation.
+
+In this work, the pointing information associated with each detector therefore consists of:
+\begin{itemize}
+    \item two angles $(\theta, \varphi)$ describing the direction of the main beam on the sky;
+    \item a single effective polarization angle $\phi$.
+\end{itemize}
+
+The effective polarization angle includes the contribution from both the intrinsic detector orientation and the rotation of the \textit{Half-Wave Plate (HWP)}. The HWP is a birefringent optical element, typically realized using materials such as sapphire, whose thickness is chosen to introduce a phase shift of half a wavelength ($\lambda/2$) between orthogonal polarization components.
+
+By rotating continuously during the observation, the HWP modulates the polarized component of the incoming radiation. This modulation shifts the polarization signal to higher temporal frequencies, reducing the impact of correlated low-frequency ($1/f$) noise and instrumental systematic effects. Although this leads to a more complex time-domain signal, it significantly improves the robustness of the polarization measurement.
+
+
+
+
+\section{Scanning Strategy}
+
+The scanning strategy describes how the spacecraft surveys the sky as a function of time and plays a crucial role in determining the structure of the TOD and the impact of correlated noise.
+
+LiteBIRD will perform a continuous sky survey, achieved through a combination of periodic rotations rather than discrete pointings. In particular, the spacecraft motion can be described as the composition of three rotations:
+\begin{itemize}
+    \item a rotation around the spacecraft spin axis at constant angular speed;
+    \item a precession of the spin axis around the Sun–Earth direction;
+    \item the annual motion of the Sun–Earth axis around the Sun.
+\end{itemize}
+
+LBS models this scanning strategy by encoding the spacecraft rotations using quaternions. To improve computational efficiency, the quaternions are sampled at a frequency lower than the detector sampling rate and then interpolated to the nominal rate using spherical linear interpolation.
+
+In this thesis, both IMo-based scanning strategies, derived from the official Instrument Model, and simplified scanning setups are employed. The latter are particularly useful for testing and validation purposes, as they reduce complexity and allow the isolation of specific effects related to instrumental noise.
+
+
+\section{Instrument and Detector Modeling}
+
+Any realistic simulation requires a detailed description of how the instrument is built and how it operates. In the LiteBIRD context, this information is provided by the Instrument Model (IMo), a structured database containing the calibrated and measured parameters describing the spacecraft, the optical system, and the individual detectors.
+
+
+
+\subsection{The Instrument Model (IMo)}
+The \textit{Instrument Model (IMo)} is the collection of all the design parameters of the 
+LiteBIRD instrument, telescope, and spacecraft. It describes the nominal configuration of the mission, including the spacecraft layout, the optical system, and the focal plane design. Each quantity in the IMo is referenced through a hierarchical path and a version identifier, ensuring traceability and 
+reproducibility of simulations.
+
+Within LBS, the IMo is accessed through structured objects representing different entities, such as:
+\begin{itemize}
+    \item \texttt{scanning\_parameters}, defining the nominal scanning strategy;
+    \item \texttt{instrument\_info}, describing global properties of the focal plane;
+    \item \texttt{detector\_info}, containing noise and sampling characteristics of individual detectors;
+    \item \texttt{channel\_info}, providing average properties for detectors operating at the same frequency.
+\end{itemize}
+
+LBS allows simulations to be configured either using the official LiteBIRD IMo or a reduced, publicly accessible version containing synthetic but representative parameters. The latter is particularly useful for development and testing purposes, as it enables full reproducibility without requiring access to restricted collaboration data.
+
+
+
+\subsection{Detector Models}
+
+In this work, two types of detector models are employed:
+\begin{itemize}
+    \item IMo-based detectors, which load realistic parameters directly from the Instrument Model;
+    \item custom (mock) detectors, defined by manually specifying a set of parameters.
+\end{itemize}
+
+The use of mock detectors allows full control over noise properties and enables targeted tests, while IMO-based detectors provide a more realistic representation of the expected in-flight instrument performance.
+
+Each detector is characterized by a set of parameters describing its sampling and noise properties, including:
+\begin{itemize}
+    \item \texttt{sampling\_rate\_hz}, the sampling frequency of the detector, expressed in Hz;
+
+    \item \texttt{net\_ukrts}, the noise-equivalent temperature (NET), which quantifies the detector noise level and is expressed in $\mu\mathrm{K}\sqrt{\mathrm{s}}$;
+
+    \item \texttt{fknee\_mhz}, the knee frequency at which the noise transitions from being dominated by correlated $1/f$ noise to an approximately white regime, expressed in mHz;
+
+    \item \texttt{fmin\_hz}, the minimum reference frequency below which the noise is assumed to be white, expressed in Hz;
+
+    \item \texttt{alpha}, the spectral index controlling the steepness of the $1/f$ noise rise toward low frequencies.
+\end{itemize}
+
+Although the simulations presented in this thesis use a single detector for simplicity, the implementation fully supports multiple detectors and can be straightforwardly extended to more realistic multi-detector configurations.
+
+
+
+\section{Simulation Workflow}
+The elements described above define the building blocks of the simulations performed in this work. Their interaction within a typical simulation pipeline is summarized below.
+The typical workflow adopted in this work follows these steps:
+\begin{enumerate}
+    \item initialization of the simulation environment;
+    \item definition of the scanning strategy;
+    \item configuration of the instrument and detector models;
+    \item creation of observation objects and allocation of TOD;
+    \item addition of instrumental noise to the timelines;
+    \item analysis of the results in the time and frequency domains, or production of sky maps.
+\end{enumerate}
+
+This structured approach ensures clarity, reproducibility, and a clear separation between the simulation setup and the noise-analysis procedures.
+

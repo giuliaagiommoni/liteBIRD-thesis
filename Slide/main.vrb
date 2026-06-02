@@ -1,0 +1,52 @@
+\frametitle{Backup: Continuità tra Blocchi}
+\metroset{block=transparent}
+
+  \begin{columns}[T]
+    % --- COLONNA LBS (FFT) ---
+    \begin{column}{0.48\textwidth}
+      \begin{block}{\texttt{add\_lbsNoise} (FFT)}
+        \fontsize{7pt}{8pt}\selectfont
+        \begin{itemize}
+            \item \textbf{Stateless}: Non ha memoria tra i blocchi.
+        \end{itemize}
+        \begin{semiverbatim}
+\textcolor{gray}{# Loop sui blocchi}
+for start in range(0, n_samp, n_block):
+    end = min(start + n_block, n_samp)
+
+    \textcolor{orange!80!black}{\textbf{lbs.add_noise}}(
+        tod=tod[:, start:end],
+        \textcolor{gray}{# Funzione chiamata a ogni blocco}
+    )
+    \textcolor{gray}{# Ogni chiamata genera fasi}
+    \textcolor{gray}{# casuali indipendenti.}
+        \end{semiverbatim}
+        \centering
+        \tikz{\node[red, font=\tiny\bfseries, draw=red, rounded corners=2pt] {DISCONTINUITÀ AI BORDI};}
+      \end{block}
+    \end{column}
+
+    % --- COLONNA FILTRI (OOFA) ---
+    \begin{column}{0.48\textwidth}
+      \begin{block}{\texttt{add\_OofaNoise} (Filtri)}
+        \fontsize{7pt}{8pt}\selectfont
+        \begin{itemize}
+            \item \textbf{Stateful}: Preserva lo stato del filtro.
+        \end{itemize}
+        \begin{semiverbatim}
+\textcolor{orange!80!black}{\textbf{gens = [OofaNoise(...) for _ in dets]}}
+\textcolor{gray}{# Istanza creata FUORI dal loop}
+
+for start in range(0, n_samp, n_block):
+    for d in range(n_det):
+        \textcolor{gray}{# Il filtro riparte dallo}
+        \textcolor{gray}{# stato interno precedente}
+        tod[d, start:end] += \\
+           \textcolor{orange!80!black}{\textbf{gens[d].filterGaussian}}(...)
+        \end{semiverbatim}
+        \centering
+        \tikz{\node[mDarkTeal, font=\tiny\bfseries, draw=mDarkTeal, rounded corners=2pt] {CONTINUITÀ GARANTITA};}
+      \end{block}
+    \end{column}
+  \end{columns}
+
